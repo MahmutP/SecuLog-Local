@@ -1,6 +1,5 @@
-import sys
-from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import WordCompleter, NestedCompleter
+from prompt_toolkit.document import Document
+from prompt_toolkit.completion import Completer, Completion, NestedCompleter
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
 from rich.console import Console
@@ -8,15 +7,52 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 from database.db_manager import connect_db
-
-# Rich Console Setup
 console = Console()
+
+# --- Custom Completer with Meta Support ---
+class MetaNestedCompleter(Completer):
+    def __init__(self, options, meta_dict=None):
+        self.options = options  # {key: sub_completer_or_dict_or_none}
+        self.meta_dict = meta_dict or {}
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor.lstrip()
+        
+        # Context handling (Recurse if space exists)
+        if ' ' in text:
+            first_word, remaining = text.split(' ', 1)
+            if first_word in self.options:
+                sub = self.options[first_word]
+                
+                # Dynamic handling if sub is a dict (convert on the fly logic or expect Completer)
+                completer = sub
+                if isinstance(sub, dict):
+                    # For simplicity, treat raw dicts as standard NestedCompleter without meta unless wrapped
+                    completer = NestedCompleter.from_nested_dict(sub)
+                
+                if isinstance(completer, Completer):
+                    new_document = Document(
+                        remaining,
+                        cursor_position=document.cursor_position - len(first_word) - 1
+                    )
+                    yield from completer.get_completions(new_document, complete_event)
+            return
+
+        # Current level completion
+        word = document.get_word_before_cursor()
+        for key in self.options:
+            if key.startswith(word):
+                meta = self.meta_dict.get(key)
+                yield Completion(key, start_position=-len(word), display_meta=meta)
 
 # Prompt Toolkit Style
 style = Style.from_dict({
     'prompt': 'ansicyan bold',
     'output': '#af00ff',
 })
+
+import sys
+from prompt_toolkit import PromptSession
 
 # --- Helper Functions ---
 def print_banner():
@@ -28,17 +64,32 @@ def print_banner():
     panel = Panel(banner_text, border_style="cyan", expand=False)
     console.print(panel)
 
-def get_targets_for_completion():
-    """Fetch target names for dynamic autocompletion."""
+
+def get_vulns_for_completion():
+    """Fetch vulnerability IDs and Titles for dynamic autocompletion."""
     try:
         conn = connect_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM targets")
-        targets = [row[0] for row in cursor.fetchall()]
+        cursor.execute("SELECT id, title FROM vulnerabilities")
+        # Return dict {id: title} for description display
+        vulns = {str(row[0]): row[1] for row in cursor.fetchall()}
         conn.close()
-        return targets
+        return vulns
     except:
-        return []
+        return {}
+
+def get_targets_for_completion():
+    """Fetch target IDs and Names for dynamic autocompletion."""
+    try:
+        conn = connect_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name FROM targets")
+        # Return dict {id: name} for description display
+        targets = {str(row[0]): row[1] for row in cursor.fetchall()}
+        conn.close()
+        return targets # {id: name}
+    except:
+        return {}
 
 # --- Business Logic ---
 def do_add_target(args):
@@ -56,6 +107,99 @@ def do_add_target(args):
         conn.commit()
         conn.close()
         console.print(f"[bold green][+] Target '{name}' added successfully![/bold green]")
+    except Exception as e:
+        console.print(f"[bold red][!] Error:[/bold red] {e}")
+
+def do_add_vuln(args):
+    """usage: add_vuln <target_id> <title> <severity> <cvss>"""
+    if len(args) < 4:
+        console.print("[red]Usage: add_vuln <target_id> <title> <severity> <cvss>[/red]")
+        return
+    
+    try:
+        target_id = int(args[0])
+        title = args[1]
+        severity = args[2]
+        cvss = float(args[3])
+    except ValueError:
+         console.print("[red]Error: Invalid format. Target ID must be int, CVSS must be float.[/red]")
+         return
+
+    try:
+        conn = connect_db()
+        cursor = conn.cursor()
+        
+        # Check if target exists
+        cursor.execute("SELECT id FROM targets WHERE id = ?", (target_id,))
+        if not cursor.fetchone():
+             console.print("[red]Error: Target ID not found.[/red]")
+             conn.close()
+             return
+
+        cursor.execute('''
+            INSERT INTO vulnerabilities (target_id, title, severity, cvss_score) 
+            VALUES (?, ?, ?, ?)
+        ''', (target_id, title, severity, cvss))
+        conn.commit()
+        conn.close()
+        console.print(f"[bold green][+] Vulnerability '{title}' added successfully![/bold green]")
+    except Exception as e:
+        console.print(f"[bold red][!] Error:[/bold red] {e}")
+
+
+def do_delete_target(args):
+    """usage: delete_target <id>"""
+    if not args:
+        console.print("[red]Usage: delete_target <id>[/red]")
+        return
+    
+    try:
+        target_id = int(args[0])
+        conn = connect_db()
+        cursor = conn.cursor()
+        
+        # Check if target exists
+        cursor.execute("SELECT name FROM targets WHERE id = ?", (target_id,))
+        row = cursor.fetchone()
+        if not row:
+             console.print("[red]Error: Target ID not found.[/red]")
+             conn.close()
+             return
+        
+        name = row[0]
+        # Delete vulnerabilities first (CASCADE usually handles this but let's be safe/explicit if FK not enforced)
+        cursor.execute("DELETE FROM vulnerabilities WHERE target_id = ?", (target_id,))
+        cursor.execute("DELETE FROM targets WHERE id = ?", (target_id,))
+        
+        conn.commit()
+        conn.close()
+        console.print(f"[bold green][+] Target '{name}' and its vulnerabilities deleted![/bold green]")
+    except ValueError:
+        console.print("[red]Error: ID must be an integer.[/red]")
+    except Exception as e:
+        console.print(f"[bold red][!] Error:[/bold red] {e}")
+
+def do_delete_vuln(args):
+    """usage: delete_vuln <id>"""
+    if not args:
+        console.print("[red]Usage: delete_vuln <id>[/red]")
+        return
+
+    try:
+        vuln_id = int(args[0])
+        conn = connect_db()
+        cursor = conn.cursor()
+        
+        cursor.execute("DELETE FROM vulnerabilities WHERE id = ?", (vuln_id,))
+        
+        if cursor.rowcount == 0:
+            console.print("[red]Error: Vulnerability ID not found.[/red]")
+        else:
+            conn.commit()
+            console.print(f"[bold green][+] Vulnerability {vuln_id} deleted successfully![/bold green]")
+        conn.close()
+    except ValueError:
+        console.print("[red]Error: ID must be an integer.[/red]")
     except Exception as e:
         console.print(f"[bold red][!] Error:[/bold red] {e}")
 
@@ -117,7 +261,8 @@ def do_help():
     table.add_column("Description", style="white")
     
     commands = [
-        ("add_target", "Add a new target (usage: add_target <name> <url> <type>)"),
+        ("add_target", "Add a new target"),
+        ("add_vuln", "Add a vulnerability (usage: add_vuln <id> <title> <sev> <cvss>)"),
         ("show targets", "List all registered targets"),
         ("show vulns", "List all vulnerabilities"),
         ("clear", "Clear the screen"),
@@ -133,14 +278,33 @@ def do_help():
 def main():
     print_banner()
     
-    # Nested Completer for subcommands
-    completer = NestedCompleter.from_nested_dict({
+    # MetaNestedCompleter requires:
+    # 1. options: dict structure for nesting
+    # 2. meta_dict: descriptions for current level keys
+    
+    # Base commands structure
+    base_options = {
         'show': {'targets': None, 'vulns': None},
         'add_target': None,
+        'add_vuln': None, # We will inject targets here dynamically
+        'delete_target': None, # Dynamic injection
+        'delete_vuln': None, # Dynamic injection
         'help': None,
         'exit': None,
         'clear': None,
-    })
+    }
+
+    # Meta descriptions for top-level commands
+    base_meta = {
+        'show': 'Show information (targets/vulns)',
+        'add_target': 'Add a new target to database',
+        'add_vuln': 'Add a vulnerability to a target',
+        'delete_target': 'Delete a target by ID',
+        'delete_vuln': 'Delete a vulnerability by ID',
+        'help': 'Show help message',
+        'exit': 'Exit the application',
+        'clear': 'Clear terminal screen',
+    }
 
     session = PromptSession(
         history=FileHistory('.seculog_history'),
@@ -149,6 +313,29 @@ def main():
 
     while True:
         try:
+            # 1. Get current targets {id: name}
+            targets_meta = get_targets_for_completion()
+            vulns_meta = get_vulns_for_completion()
+            
+            # 2. Prepare options for dynamic commands
+            target_ids_completer = MetaNestedCompleter(
+                options={tid: None for tid in targets_meta.keys()}, 
+                meta_dict=targets_meta
+            )
+            vuln_ids_completer = MetaNestedCompleter(
+                options={vid: None for vid in vulns_meta.keys()}, 
+                meta_dict=vulns_meta
+            )
+            
+            # 3. Update base options 
+            current_options = base_options.copy()
+            current_options['add_vuln'] = target_ids_completer
+            current_options['delete_target'] = target_ids_completer
+            current_options['delete_vuln'] = vuln_ids_completer
+
+            # 4. Create the main completer
+            completer = MetaNestedCompleter(options=current_options, meta_dict=base_meta)
+            
             text = session.prompt('seculog > ', completer=completer)
             text = text.strip()
             
@@ -168,6 +355,12 @@ def main():
                 do_help()
             elif cmd == 'add_target':
                 do_add_target(args)
+            elif cmd == 'add_vuln':
+                do_add_vuln(args)
+            elif cmd == 'delete_target':
+                do_delete_target(args)
+            elif cmd == 'delete_vuln':
+                do_delete_vuln(args)
             elif cmd == 'show':
                 if len(args) > 0 and args[0] == 'targets':
                     do_show_targets()
