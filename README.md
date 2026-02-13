@@ -1,0 +1,2 @@
+# SecuLog-Local
+Güvenlik Günlüğü
