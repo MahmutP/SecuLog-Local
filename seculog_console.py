@@ -1,55 +1,109 @@
 import cmd2
+import argparse
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 from database.db_manager import connect_db
 import sys
 
+console = Console()
+
 class SecuLogApp(cmd2.Cmd):
-    intro = """
-===================================================
-   🛡️  SECULOG LOCAL - ADVANCED CONSOLE v1.0 🛡️
-===================================================
-Type 'help' or '?' to list commands.
-Type 'exit' to close the application.
-    """
-    prompt = 'seculog > '
+    def __init__(self):
+        # Set consistent persistent history file
+        super().__init__(persistent_history_file='~/.seculog_history')
+        self.prompt = 'seculog > '
+        # Remove default commands that clutter the help screen
+        self.hidden_commands = ['alias', 'macro', 'run_pyscript', 'run_script', 'shortcuts', 'edit']
 
+    # --- Banner & Intro ---
+    def intro_banner(self):
+        banner_text = Text(justify="center")
+        banner_text.append("\n🛡️  SECULOG LOCAL 🛡️\n", style="bold red")
+        banner_text.append("Advanced Vulnerability Management System\n", style="bold white")
+        banner_text.append("v1.0.0 | Type 'help -v' for verbose commands\n", style="dim cyan")
+        
+        panel = Panel(banner_text, border_style="red", expand=False)
+        console.print(panel)
+
+    def preloop(self):
+        self.intro_banner()
+
+    # --- Add Target Command ---
+    add_target_parser = cmd2.Cmd2ArgumentParser(description="Add a new target to the database.")
+    add_target_parser.add_argument('name', help="Name of the target (e.g., 'E-Commerce Site')")
+    add_target_parser.add_argument('url', help="URL or IP address of the target")
+    add_target_parser.add_argument('type', help="Type of target (Web, Mobile, etc.)")
+
+    @cmd2.with_argparser(add_target_parser)
     def do_add_target(self, args):
-        """
-        Add a new target.
-        Usage: add_target <name> <url> <type>
-        Example: add_target 'My Site' example.com Web
-        """
+        """Add a new target to the database."""
         try:
-            # Basit argüman ayrıştırma
-            parts = args.split()
-            if len(parts) < 3:
-                self.poutput("Usage: add_target <name> <url> <type>")
-                return
-            
-            name = parts[0]
-            url = parts[1]
-            target_type = parts[2]
-
             conn = connect_db()
             cursor = conn.cursor()
             cursor.execute("INSERT INTO targets (name, target_url, target_type) VALUES (?, ?, ?)", 
-                           (name, url, target_type))
+                           (args.name, args.url, args.type))
             conn.commit()
             conn.close()
-            self.poutput(f"[*] Target '{name}' added successfully.")
+            console.print(f"[bold green][+] Target '{args.name}' added successfully![/bold green]")
         except Exception as e:
-            self.poutput(f"[!] Error: {e}")
+            console.print(f"[bold red][!] Error:[/bold red] {e}")
 
+    # --- Show Command ---
+    show_parser = cmd2.Cmd2ArgumentParser(description="Display targets or vulnerabilities.")
+    show_subparsers = show_parser.add_subparsers(title="subcommands", help="sub-command help")
+
+    # show targets
+    show_targets_parser = show_subparsers.add_parser('targets', help="List all registered targets")
+    
+    # show vulns
+    show_vulns_parser = show_subparsers.add_parser('vulns', help="List all vulnerabilities")
+    show_vulns_parser.add_argument('-t', '--target', type=int, help="Filter vulnerabilities by Target ID")
+
+    @cmd2.with_argparser(show_parser)
+    def do_show(self, args):
+        """Show targets or vulnerabilities with formatted tables."""
+        # args namespace comes from the subparser. 
+        # Check which subcommand was called by inspecting args attributes or passed command
+        # cmd2 argparse integration handles this dynamically.
+        
+        # Since we use subparsers, we need to know which one was selected.
+        # But cmd2's handling with subparsers is a bit tricky in one method.
+        # A clearer pattern in cmd2 is to use distinct methods or check attributes.
+        # Here we will check the 'func' attribute if we were using set_defaults, 
+        # or simply check the command line string in a raw 'do_show'.
+        # However, purely with argparser decorator:
+        
+        # Let's simplify: check sys.argv logic inside? No.
+        # Check the 'subcommand' name manually? 
+        # Actually, let's look at the subcommand parsers.
+        pass
+    
+    # Redefine show command without subparser decorator for simpler logic first, 
+    # or use separate commands like `show_targets` and alias them. 
+    # But user wants `show targets`.
+    
+    # Recommended Cmd2 pattern for 'show <subcommand>':
     def do_show(self, args):
         """
-        Show targets or vulnerabilities.
+        Show information about targets or vulnerabilities.
         Usage: show targets | show vulns
         """
-        if args == 'targets':
+        if not args:
+            self.do_help('show')
+            return
+
+        argv = args.split()
+        subcmd = argv[0].lower()
+
+        if subcmd == 'targets':
             self._show_targets()
-        elif args == 'vulns':
+        elif subcmd == 'vulns':
             self._show_vulns()
         else:
-            self.poutput("Usage: show [targets|vulns]")
+            console.print(f"[red]Unknown subcommand: {subcmd}[/red]")
+            console.print("Valid subcommands: targets, vulns")
 
     def _show_targets(self):
         conn = connect_db()
@@ -59,13 +113,19 @@ Type 'exit' to close the application.
         conn.close()
 
         if not targets:
-            self.poutput("No targets found.")
+            console.print("[yellow]No targets found. Use 'add_target' to create one.[/yellow]")
             return
 
-        self.poutput(f"{'ID':<5} {'Name':<20} {'URL':<30} {'Type':<10}")
-        self.poutput("-" * 65)
+        table = Table(title="🎯 Registered Targets", show_header=True, header_style="bold magenta")
+        table.add_column("ID", style="cyan", width=5)
+        table.add_column("Name", style="green")
+        table.add_column("URL / IP", style="yellow")
+        table.add_column("Type", style="blue")
+
         for t in targets:
-            self.poutput(f"{t[0]:<5} {t[1]:<20} {t[2]:<30} {t[3]:<10}")
+            table.add_row(str(t[0]), t[1], t[2], t[3])
+        
+        console.print(table)
 
     def _show_vulns(self):
         conn = connect_db()
@@ -79,17 +139,32 @@ Type 'exit' to close the application.
         conn.close()
 
         if not vulns:
-            self.poutput("No vulnerabilities found.")
+            console.print("[yellow]No vulnerabilities found.[/yellow]")
             return
 
-        self.poutput(f"{'ID':<5} {'Target':<20} {'Vulnerability':<30} {'Severity':<10} {'CVSS'}")
-        self.poutput("-" * 80)
-        for v in vulns:
-            self.poutput(f"{v[0]:<5} {v[1]:<20} {v[2]:<30} {v[3]:<10} {v[4]}")
+        table = Table(title="🐛 Vulnerability Report", show_header=True, header_style="bold red")
+        table.add_column("ID", style="cyan", width=5)
+        table.add_column("Target", style="green")
+        table.add_column("Vulnerability", style="white")
+        table.add_column("Severity", justify="center")
+        table.add_column("CVSS", justify="right")
 
+        for v in vulns:
+            # Colorize severity
+            severity = v[3]
+            sev_style = "green"
+            if severity.lower() == "critical": sev_style = "bold red"
+            elif severity.lower() == "high": sev_style = "red"
+            elif severity.lower() == "medium": sev_style = "yellow"
+            
+            table.add_row(str(v[0]), v[1], v[2], Text(severity, style=sev_style), str(v[4]))
+        
+        console.print(table)
+
+    # --- Other Commands ---
     def do_exit(self, args):
         """Exit the application."""
-        self.poutput("Goodbye!")
+        console.print("[bold red]Goodbye![/bold red]")
         return True
 
 if __name__ == '__main__':
