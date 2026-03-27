@@ -17,20 +17,35 @@ docker-compose up -d
 *(Eğer daha önce indirdiyseniz hemen saniyeler içinde bağlanacaktır. İlk kez çalıştırıyorsanız imajın inmesi biraz sürebilir. `-d` parametresi arka planda sessiz çalışmasını sağlar.)*
 
 ### Adım 2: Backend (Python API) Sunucusunu Çalıştırmak
-İkinci bir terminal açın ve Python sanal ortamını aktif edip API'yi başlatın:
+İkinci bir terminal açın ve Python sanal ortamını hazırlayıp API'yi başlatın:
 ```bash
 # Projenin ana klasöründeyken:
 cd backend-api
+
+# 1. Eğer uygulamayı ilk kez çalıştırıyorsanız sanal ortam oluşturun:
+python3 -m venv venv
+
+# 2. Sanal ortamı aktif edin (Her yeni terminalde yapılmalı):
 source venv/bin/activate
+
+# 3. Eğer ilk kez çalıştırıyorsanız paketleri indirin:
+pip install -r requirements.txt
+
+# 4. Sunucuyu başlatın:
 uvicorn main:app --reload
 ```
 *(Bu komuttan sonra `Application startup complete` ve `Uvicorn running on http://127.0.0.1:8000` yazısını görmelisiniz.)*
 
 ### Adım 3: Frontend (React) Arayüzünü Çalıştırmak
-Üçüncü bir terminal açın ve React uygulamanızı başlatın:
+Üçüncü bir terminal açın ve React uygulamanızı hazırlayıp başlatın:
 ```bash
 # Projenin ana klasöründeyken:
 cd frontend-ui
+
+# 1. Eğer uygulamayı ilk kez çalıştırıyorsanız paketleri indirin:
+npm install
+
+# 2. Arayüzü çalıştırın:
 npm run dev
 ```
 *(Terminalde beliren `http://localhost:5173/` veya benzeri URL'ye tıklayarak SecuLog-Local arayüzünüze erişebilirsiniz.)*
