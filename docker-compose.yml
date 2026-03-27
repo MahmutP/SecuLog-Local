@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  seculog_db:
+    image: postgres:15
+    container_name: seculog_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: seculog_user
+      POSTGRES_PASSWORD: seculog_pass
+      POSTGRES_DB: seculog
+    ports:
+      - "5432:5432"
+    volumes:
+      - seculog_pgdata:/var/lib/postgresql/data
+
+volumes:
+  seculog_pgdata:
